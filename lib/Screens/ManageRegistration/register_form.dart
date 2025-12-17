@@ -39,61 +39,87 @@ class _RegisterFormState extends State<RegisterForm> {
     super.dispose();
   }
 
+  // -------------------
+  // Preventive helpers
+  // -------------------
+
+  // Sanitize input (trim whitespace)
+  String sanitize(String input) => input.trim();
+
+  // Normalize email (trim + lowercase)
+  String normalizeEmail(String email) => email.trim().toLowerCase();
+
+  // Normalize phone (remove spaces, dashes, parentheses)
+  String normalizePhone(String phone) =>
+      phone.replaceAll(RegExp(r'[\s\-\(\)]'), '');
+
+  // -------------------
+  // Form submission
+  // -------------------
   Future<void> _submitForm() async {
-    if (_formKey.currentState!.validate()) {
-      bool confirmed = await showDialog(
-        context: context,
-        builder:
-            (_) => const ConfirmationDialog(
-              title: 'Confirm Registration',
-              content: 'Are you sure you want to submit your registration?',
+    if (!_formKey.currentState!.validate()) return;
+
+    // Confirmation dialog
+    bool confirmed = await showDialog(
+      context: context,
+      builder:
+          (_) => const ConfirmationDialog(
+            title: 'Confirm Registration',
+            content: 'Are you sure you want to submit your registration?',
+          ),
+    );
+
+    if (!confirmed) return;
+
+    setState(() => _isSubmitting = true);
+
+    if (kDebugMode) {
+      print('Registering user with role: ${widget.userRole}');
+    }
+
+    // Prepare user object safely
+    final user = _controller.createUser(
+      role: widget.userRole,
+      firstName: sanitize(_firstNameController.text),
+      lastName: sanitize(_lastNameController.text),
+      email: normalizeEmail(_emailController.text),
+      phoneNumber: normalizePhone(_phoneController.text),
+      password: sanitize(_passwordController.text),
+    );
+
+    bool saved = false;
+
+    try {
+      saved = await _controller.saveUser(user);
+    } catch (e) {
+      if (kDebugMode) print('Error saving user: $e');
+    }
+
+    setState(() => _isSubmitting = false);
+
+    if (saved) {
+      if (mounted) {
+        Navigator.pushReplacementNamed(context, AppRoutes.registrationSuccess);
+      }
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Failed to save registration data. Please try again.',
             ),
-      );
-
-      if (confirmed) {
-        setState(() {
-          _isSubmitting = true;
-        });
-
-        if (kDebugMode) {
-          print('Registering user with role: ${widget.userRole}');
-        }
-
-        final user = _controller.createUser(
-          role: widget.userRole,
-          firstName: _firstNameController.text.trim(),
-          lastName: _lastNameController.text.trim(),
-          email: _emailController.text.trim(),
-          phoneNumber: _phoneController.text.trim(),
-          password: _passwordController.text.trim(),
+          ),
         );
-
-        bool saved = await _controller.saveUser(user);
-
-        setState(() {
-          _isSubmitting = false;
-        });
-
-        if (saved) {
-          if (mounted) {
-            Navigator.pushReplacementNamed(
-              context,
-              AppRoutes.registrationSuccess,
-            );
-          }
-        } else {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Failed to save registration data.'),
-              ),
-            );
-          }
-        }
+      }
+      if (kDebugMode) {
+        print('Failed registration attempt for: ${_emailController.text}');
       }
     }
   }
 
+  // -------------------
+  // TextField builder
+  // -------------------
   Widget _buildTextField({
     required TextEditingController controller,
     required String label,
@@ -151,23 +177,32 @@ class _RegisterFormState extends State<RegisterForm> {
                 label: 'First Name *',
                 validator:
                     (value) =>
-                        value == null || value.isEmpty ? 'Required' : null,
+                        value == null || value.trim().isEmpty
+                            ? 'First name is required'
+                            : null,
               ),
               _buildTextField(
                 controller: _lastNameController,
                 label: 'Last Name *',
                 validator:
                     (value) =>
-                        value == null || value.isEmpty ? 'Required' : null,
+                        value == null || value.trim().isEmpty
+                            ? 'Last name is required'
+                            : null,
               ),
               _buildTextField(
                 controller: _emailController,
                 label: 'Email *',
                 keyboardType: TextInputType.emailAddress,
                 validator: (value) {
-                  if (value == null || value.isEmpty) return 'Required';
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Email is required';
+                  }
+                  final normalized = normalizeEmail(value);
                   final emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
-                  if (!emailRegex.hasMatch(value)) return 'Invalid email';
+                  if (!emailRegex.hasMatch(normalized)) {
+                    return 'Enter a valid email';
+                  }
                   return null;
                 },
               ),
@@ -175,28 +210,44 @@ class _RegisterFormState extends State<RegisterForm> {
                 controller: _phoneController,
                 label: 'Phone Number *',
                 keyboardType: TextInputType.phone,
-                validator:
-                    (value) =>
-                        value == null || value.isEmpty ? 'Required' : null,
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Phone number is required';
+                  }
+                  final normalized = normalizePhone(value);
+                  if (!RegExp(r'^\+?\d{8,15}$').hasMatch(normalized)) {
+                    return 'Enter a valid phone number';
+                  }
+                  return null;
+                },
               ),
               _buildTextField(
                 controller: _passwordController,
                 label: 'Password *',
                 obscureText: _obscurePassword,
                 validator: (value) {
-                  if (value == null || value.isEmpty) return 'Required';
+                  if (value == null || value.isEmpty) {
+                    return 'Password is required';
+                  }
                   if (value.length < 6) return 'Minimum 6 characters';
+                  if (!RegExp(r'[A-Z]').hasMatch(value)) {
+                    return 'Must include uppercase letter';
+                  }
+                  if (!RegExp(r'\d').hasMatch(value)) {
+                    return 'Must include number';
+                  }
+                  if (!RegExp(r'[!@#$%^&*(),.?":{}|<>]').hasMatch(value)) {
+                    return 'Must include special character';
+                  }
                   return null;
                 },
                 suffixIcon: IconButton(
                   icon: Icon(
                     _obscurePassword ? Icons.visibility : Icons.visibility_off,
                   ),
-                  onPressed: () {
-                    setState(() {
-                      _obscurePassword = !_obscurePassword;
-                    });
-                  },
+                  onPressed:
+                      () =>
+                          setState(() => _obscurePassword = !_obscurePassword),
                 ),
               ),
               _buildTextField(
@@ -204,7 +255,9 @@ class _RegisterFormState extends State<RegisterForm> {
                 label: 'Confirm Password *',
                 obscureText: _obscureConfirmPassword,
                 validator: (value) {
-                  if (value == null || value.isEmpty) return 'Required';
+                  if (value == null || value.isEmpty) {
+                    return 'Confirm your password';
+                  }
                   if (value != _passwordController.text) {
                     return 'Passwords do not match';
                   }
@@ -216,11 +269,11 @@ class _RegisterFormState extends State<RegisterForm> {
                         ? Icons.visibility
                         : Icons.visibility_off,
                   ),
-                  onPressed: () {
-                    setState(() {
-                      _obscureConfirmPassword = !_obscureConfirmPassword;
-                    });
-                  },
+                  onPressed:
+                      () => setState(
+                        () =>
+                            _obscureConfirmPassword = !_obscureConfirmPassword,
+                      ),
                 ),
               ),
               const SizedBox(height: 20),
